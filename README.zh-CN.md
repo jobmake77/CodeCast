@@ -2,7 +2,7 @@
 
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue)](#环境要求)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](#许可证)
-[![UI](https://img.shields.io/badge/interface-terminal%20panel-black)](#交互界面)
+[![UI](https://img.shields.io/badge/interface-terminal%20client-black)](#终端客户端)
 [![Status](https://img.shields.io/badge/status-mvp-orange)](#路线图)
 
 把每次 `git push` 变成可发布的开发动态。
@@ -15,7 +15,7 @@ English: [README.md](./README.md)
 
 - 避免“功能做了很多，但没有及时对外同步”。
 - 按 push 聚合，避免 commit 级别刷屏。
-- 终端面板式交互（`codecast` 直接进入）。
+- 终端持续会话客户端（`codecast` 直接进入）。
 - 发布前人工确认，降低误发风险。
 - 支持按仓库配置。
 - 通过 `opencli` 发布（可接 Twitter/X 等）。
@@ -23,8 +23,8 @@ English: [README.md](./README.md)
 ## 30 秒体验流程
 
 1. 正常开发并 `git push`
-2. 输入 `codecast` 打开面板
-3. 预览草稿、切换风格、dry-run
+2. 输入 `codecast` 打开客户端
+3. 查看草稿、dry-run、发布
 4. 确认后发布
 
 ## 架构
@@ -34,7 +34,7 @@ flowchart LR
     A["git push"] --> B["post-push hook"]
     B --> C["codecast collect"]
     C --> D["SQLite (events/commits/drafts/logs)"]
-    D --> E["codecast 面板 UI"]
+    D --> E["codecast 客户端"]
     E --> F["opencli twitter post"]
     F --> G["Twitter/X"]
 ```
@@ -93,23 +93,32 @@ git push
 codecast
 ```
 
-## 交互界面
+## 终端客户端
 
-`codecast` 默认进入 panel 模式。
+`codecast` 默认进入 plain 客户端模式（最稳定）。
+如果你想要 panel 形态，执行 `codecast cast`。
 
-### 键位说明
+### 单词命令（无单字母）
 
 ```text
-j / k / ↑ / ↓  选择草稿
-p              发布当前草稿（会弹确认框）
-d              dry-run 当前草稿
-x              重试当前 FAILED 草稿
-h              查看当前草稿发布历史
-s              切换风格（formal/friendly/punchy）
-a              切换列表（pending/all）
-/              输入斜杠命令
-q              退出
+status
+pending
+all
+select <id|latest>
+show [id|latest]
+style <formal|friendly|punchy> [id]
+dry-run [id|latest]
+publish [id|latest]
+retry [id|latest]
+history [id|latest] [limit]
+setup
+config
+config set <key> <value>
+help
+exit
 ```
+
+你也可以随时用斜杠命令（如 `/pending`、`/post latest`）。
 
 ## 斜杠命令
 
@@ -130,6 +139,9 @@ q              退出
 
 ```bash
 codecast init
+codecast setup --repo /repo/a
+codecast onboarding status
+codecast onboarding reset
 codecast collect --repo /path/to/repo --oldrev <old_sha> --newrev <new_sha>
 codecast drafts list --all
 codecast drafts render --draft 1 --style friendly
@@ -138,6 +150,7 @@ codecast publish --repos /repo/a,/repo/b --mode merged
 codecast settings set --repo /repo/a --every-n-pushes 10 --default-style friendly
 codecast install-hook --repo /repo/a
 codecast ui --plain
+codecast cast
 ```
 
 ## 配置项

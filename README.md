@@ -2,7 +2,7 @@
 
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue)](#requirements)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](#license)
-[![UI](https://img.shields.io/badge/interface-terminal%20panel-black)](#panel-ui)
+[![UI](https://img.shields.io/badge/interface-terminal%20client-black)](#terminal-client)
 [![Status](https://img.shields.io/badge/status-mvp-orange)](#roadmap)
 
 Turn every `git push` into a polished social update.
@@ -15,7 +15,7 @@ CodeCast listens to your push workflow, creates drafts from commit activity, and
 
 - No more "I shipped a lot but posted nothing."
 - Push-level aggregation (not noisy commit-by-commit spam).
-- Terminal-first panel UI (`codecast`) with keyboard shortcuts.
+- Terminal-first persistent client (`codecast`) with word commands.
 - Manual confirmation before publish.
 - Per-repo settings.
 - Publish via `opencli` (Twitter/X and other adapters).
@@ -23,8 +23,8 @@ CodeCast listens to your push workflow, creates drafts from commit activity, and
 ## Demo Flow (30 seconds)
 
 1. Write code and `git push`.
-2. Open `codecast` panel.
-3. Review draft, switch style, dry-run.
+2. Open `codecast` client.
+3. Review draft, dry-run, publish.
 4. Confirm and publish.
 
 ## Architecture
@@ -34,24 +34,22 @@ flowchart LR
     A["git push"] --> B["post-push hook"]
     B --> C["codecast collect"]
     C --> D["SQLite (events/commits/drafts/logs)"]
-    D --> E["codecast panel UI"]
+    D --> E["codecast client"]
     E --> F["opencli twitter post"]
     F --> G["Twitter/X"]
 ```
 
 ## UI Preview
 
-Terminal panel (default entry: `codecast`):
+Persistent terminal client (default entry: `codecast`):
 
 ```text
-CodeCast Panel
-[12] PENDING CodeCast formal
-[11] FAILED  repo-a  friendly
------------------------------------------------
-Draft 12 | PENDING | formal
-Progress update for CodeCast...
-
-j/k move  p publish  d dry-run  x retry  h history  / command  q quit
+CodeCast Client (plain mode)
+[status] mode=home pending=1 failed=0 selected=12
+codecast(home)> pending
+codecast(drafts)> show latest
+codecast(drafts)> dry-run latest
+codecast(drafts)> publish latest
 ```
 
 ## Features
@@ -60,8 +58,8 @@ j/k move  p publish  d dry-run  x retry  h history  / command  q quit
 - Draft lifecycle: `PENDING -> FAILED/PUBLISHED -> ARCHIVED`.
 - Style presets: `formal`, `friendly`, `punchy`.
 - Multi-repo publish: `merged` or `separate`.
-- Publish history popup and failed retry.
-- Slash commands and panel mode in one tool.
+- Publish history and failed retry.
+- Word commands + slash commands in one tool.
 
 ## Installation
 
@@ -115,46 +113,41 @@ git commit -m "feat: ship something"
 git push
 ```
 
-Open panel:
+Open client:
 
 ```bash
 codecast
 ```
 
-## Panel UI
+## Terminal Client
 
-`codecast` opens plain guided mode by default (most stable across terminals).
+`codecast` opens plain client mode by default (most stable across terminals).
 Use `codecast cast` if you want panel mode.
 
 On first launch, CodeCast shows a short onboarding wizard (3 steps),
 then enters Home automatically. You can run quick setup during onboarding.
 
-Startup now opens a guided Home screen first:
-
-- What CodeCast does
-- Quick actions (view drafts, dry-run, publish latest, set command)
-- Number shortcuts (`1-7`) and `Enter` selection
-- Recommended next step based on your draft state
-- Recent activity panel (latest publish/dry-run records)
-- `/` to run slash commands directly
-
-If panel rendering is unavailable in your terminal, CodeCast automatically
-falls back to plain mode with the same Home menu (number selection + slash commands).
-
-### Key bindings
+### Client Commands (word-based)
 
 ```text
-j / k / ↑ / ↓  Move selection
-p              Publish selected draft (with confirm popup)
-b              Back to Home screen (from draft workspace)
-d              Dry-run selected draft
-x              Retry selected FAILED draft
-h              Open publish history popup
-s              Cycle style (formal/friendly/punchy)
-a              Toggle list mode (pending/all)
-/              Open slash command
-q              Quit
+status
+pending
+all
+select <id|latest>
+show [id|latest]
+style <formal|friendly|punchy> [id]
+dry-run [id|latest]
+publish [id|latest]
+retry [id|latest]
+history [id|latest] [limit]
+setup
+config
+config set <key> <value>
+help
+exit
 ```
+
+Use slash commands (`/pending`, `/post latest`, ...) anytime if you prefer.
 
 ## Slash Commands
 
@@ -186,6 +179,7 @@ codecast publish --repos /repo/a,/repo/b --mode merged
 codecast settings set --repo /repo/a --every-n-pushes 10 --default-style friendly
 codecast install-hook --repo /repo/a
 codecast ui --plain
+codecast cast
 ```
 
 ## Configuration
