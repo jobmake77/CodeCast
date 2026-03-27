@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codecast"
+version = "0.1.0"
+description = "CodeCast MVP: collect git pushes and publish drafts via opencli"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "CodeCast" }]
+dependencies = []
+
+[project.scripts]
+codecast = "codecast.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

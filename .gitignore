@@ -1,0 +1,7 @@
+.codecast.db
+.local/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+
