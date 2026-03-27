@@ -45,7 +45,7 @@ flowchart LR
 - 草稿状态流转：`PENDING -> FAILED/PUBLISHED -> ARCHIVED`
 - 三种文案风格：`formal` / `friendly` / `punchy`
 - 多仓库发布：`merged` / `separate`
-- 发布历史弹窗 + 失败重试
+- 发布历史 + 失败重试
 - 斜杠命令和面板操作并存
 
 ## 安装
@@ -74,9 +74,22 @@ PYTHONPATH=src python3 -m codecast.cli
 首次执行一次：
 
 ```bash
+codecast setup
 codecast init
 codecast config set --key publish.opencli_cmd --value "opencli twitter post"
 codecast install-hook --repo /path/to/your/repo
+```
+
+也可以一条命令针对目标仓库初始化：
+
+```bash
+codecast setup --repo /path/to/your/repo
+```
+
+重置首次引导：
+
+```bash
+codecast onboarding reset
 ```
 
 然后在你的开发仓库：
@@ -87,7 +100,7 @@ git commit -m "feat: ship something"
 git push
 ```
 
-打开面板：
+打开客户端：
 
 ```bash
 codecast
