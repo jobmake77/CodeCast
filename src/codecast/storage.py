@@ -490,3 +490,31 @@ def list_publish_logs(conn: sqlite3.Connection, draft_id: int, limit: int = 20) 
             (draft_id, max(1, int(limit))),
         ).fetchall()
     )
+
+
+def list_recent_publish_activity(conn: sqlite3.Connection, limit: int = 8) -> list[sqlite3.Row]:
+    return list(
+        conn.execute(
+            """SELECT pl.id,
+                      pl.attempted_at,
+                      pl.return_code,
+                      pl.dry_run,
+                      d.id AS draft_id,
+                      d.status AS draft_status,
+                      r.name AS repo_name
+               FROM publish_logs pl
+               JOIN drafts d ON d.id = pl.draft_id
+               LEFT JOIN repos r ON r.id = d.repo_id
+               ORDER BY pl.id DESC
+               LIMIT ?""",
+            (max(1, int(limit)),),
+        ).fetchall()
+    )
+
+
+def count_drafts(conn: sqlite3.Connection, status: str | None = None) -> int:
+    if status is None:
+        row = conn.execute("SELECT COUNT(*) AS c FROM drafts").fetchone()
+    else:
+        row = conn.execute("SELECT COUNT(*) AS c FROM drafts WHERE status = ?", (status,)).fetchone()
+    return int(row["c"]) if row else 0

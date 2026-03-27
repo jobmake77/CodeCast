@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import curses
+import os
+import shutil
 import shlex
 import sys
 import textwrap
@@ -27,7 +29,9 @@ from .storage import (
     init_db,
     list_config,
     list_drafts,
+    list_recent_publish_activity,
     list_publish_logs,
+    count_drafts,
     get_config,
     mark_publish_result,
     render_content,
@@ -241,6 +245,75 @@ def cmd_install_hook(args: argparse.Namespace) -> int:
     ensure_repo(conn, repo_path)
     hook_path = install_post_push_hook(repo_path, args.db_path)
     _print(f"Installed post-push hook at {hook_path}")
+    return 0
+
+
+def _run_quick_setup(conn, db_path: str | None, repo_path: str | None) -> tuple[bool, str]:
+    notes: list[str] = []
+    configured = get_config(conn, "publish.opencli_cmd")
+    if not configured:
+        set_config(conn, "publish.opencli_cmd", "opencli twitter post")
+        configured = "opencli twitter post"
+        notes.append("set publish.opencli_cmd=opencli twitter post")
+    else:
+        notes.append("kept existing publish.opencli_cmd")
+
+    cmd_bin = ""
+    try:
+        cmd_bin = shlex.split(configured)[0] if configured else "opencli"
+    except ValueError:
+        cmd_bin = "opencli"
+    if cmd_bin and not shutil.which(cmd_bin):
+        notes.append(f"warning: '{cmd_bin}' not found in PATH")
+
+    repo_target = repo_path
+    if not repo_target:
+        try:
+            repo_target = resolve_repo_path(".")
+        except GitError:
+            repo_target = None
+    if not repo_target:
+        notes.append("repo not detected; skip hook install")
+        return True, "; ".join(notes)
+    try:
+        repo_target = resolve_repo_path(repo_target)
+        ensure_repo(conn, repo_target)
+        hook_path = install_post_push_hook(repo_target, db_path)
+        notes.append(f"installed hook: {hook_path}")
+    except Exception as exc:  # pragma: no cover - defensive runtime feedback
+        return False, f"setup failed while installing hook: {exc}"
+    return True, "; ".join(notes)
+
+
+def cmd_setup(args: argparse.Namespace) -> int:
+    conn = connect(args.db_path)
+    init_db(conn)
+    ok, msg = _run_quick_setup(conn, args.db_path, args.repo)
+    _print(f"Quick setup {'completed' if ok else 'failed'}: {msg}")
+    return 0 if ok else 1
+
+
+def cmd_onboarding_status(args: argparse.Namespace) -> int:
+    conn = connect(args.db_path)
+    init_db(conn)
+    done = get_config(conn, "ui.onboarding_done", "0") == "1"
+    _print(f"onboarding_done={'1' if done else '0'}")
+    return 0
+
+
+def cmd_onboarding_reset(args: argparse.Namespace) -> int:
+    conn = connect(args.db_path)
+    init_db(conn)
+    set_config(conn, "ui.onboarding_done", "0")
+    _print("Onboarding has been reset. Next 'codecast' launch will show onboarding.")
+    return 0
+
+
+def cmd_onboarding_complete(args: argparse.Namespace) -> int:
+    conn = connect(args.db_path)
+    init_db(conn)
+    set_config(conn, "ui.onboarding_done", "1")
+    _print("Onboarding marked as completed.")
     return 0
 
 
@@ -514,7 +587,45 @@ def _handle_slash_command(conn, raw: str, printer=_print) -> bool:
 
 def _run_line_ui(conn) -> int:
     _print("CodeCast Interactive UI")
-    _print("Type /help for commands. Type /exit to quit.")
+    _print("Welcome. Type a word command (no single-letter shortcuts). Type /exit to quit.")
+    menu = [
+        ("pending", "View pending drafts"),
+        ("all", "View all drafts"),
+        ("dry-run", "Dry-run latest draft"),
+        ("publish", "Publish latest draft"),
+        ("setup", "Quick setup (current repo)"),
+        ("help", "Show slash command help"),
+        ("refresh", "Refresh home"),
+        ("exit", "Exit"),
+    ]
+
+    def print_menu() -> None:
+        pending_count = count_drafts(conn, STATUS_PENDING)
+        failed_count = count_drafts(conn, STATUS_FAILED)
+        _print("")
+        _print("==== Home ====")
+        _print(f"Pending drafts: {pending_count} | Failed drafts: {failed_count}")
+        if pending_count > 0:
+            _print("Recommended: type 'pending' to review pending drafts.")
+        elif failed_count > 0:
+            _print("Recommended: type 'all' then '/retry latest'.")
+        else:
+            _print("Recommended: push code first, then return here.")
+        for cmd, desc in menu:
+            _print(f"- {cmd:8s} : {desc}")
+
+    def print_next_hint() -> None:
+        pending_count = count_drafts(conn, STATUS_PENDING)
+        failed_count = count_drafts(conn, STATUS_FAILED)
+        if pending_count > 0:
+            _print("Next: type 'pending' to review drafts, then 'dry-run'.")
+            return
+        if failed_count > 0:
+            _print("Next: type 'all' to list drafts, then '/retry latest'.")
+            return
+        _print("Next: create a commit and push, then type 'pending'.")
+
+    print_menu()
     while True:
         try:
             raw = input("codecast> ").strip()
@@ -526,8 +637,77 @@ def _run_line_ui(conn) -> int:
             return 130
         if not raw:
             continue
+        normalized = raw.strip().lower()
+        if normalized in {"pending", "all", "dry-run", "publish", "setup", "help", "refresh", "exit"}:
+            if normalized == "pending":
+                rows = list_drafts(conn, status=STATUS_PENDING)
+                if not rows:
+                    _print("No pending drafts.")
+                else:
+                    for row in rows:
+                        _print(_format_draft_row(row))
+                print_next_hint()
+                print_menu()
+                continue
+            if normalized == "all":
+                rows = list_drafts(conn, status=None)
+                if not rows:
+                    _print("No drafts found.")
+                else:
+                    for row in rows:
+                        _print(_format_draft_row(row))
+                print_next_hint()
+                print_menu()
+                continue
+            if normalized == "dry-run":
+                draft_id = _latest_publishable_draft_id(conn)
+                if draft_id is None:
+                    _print("No pending/failed drafts to dry-run.")
+                    print_next_hint()
+                    print_menu()
+                    continue
+                configured_cmd = get_config(conn, "publish.opencli_cmd", "opencli twitter post") or "opencli twitter post"
+                _publish_one(conn, draft_id, configured_cmd, dry_run=True)
+                print_next_hint()
+                print_menu()
+                continue
+            if normalized == "publish":
+                draft_id = _latest_publishable_draft_id(conn)
+                if draft_id is None:
+                    _print("No pending/failed drafts to publish.")
+                    print_next_hint()
+                    print_menu()
+                    continue
+                confirm = input(f"Publish latest draft #{draft_id}? (y/N): ").strip().lower()
+                if confirm != "y":
+                    _print("Publish cancelled.")
+                    print_next_hint()
+                    print_menu()
+                    continue
+                configured_cmd = get_config(conn, "publish.opencli_cmd", "opencli twitter post") or "opencli twitter post"
+                _publish_one(conn, draft_id, configured_cmd, dry_run=False)
+                print_next_hint()
+                print_menu()
+                continue
+            if normalized == "setup":
+                ok, msg = _run_quick_setup(conn, None, None)
+                _print(f"Quick setup {'completed' if ok else 'failed'}: {msg}")
+                print_next_hint()
+                print_menu()
+                continue
+            if normalized == "help":
+                _ui_help()
+                print_menu()
+                continue
+            if normalized == "refresh":
+                print_menu()
+                continue
+            if normalized == "exit":
+                return 0
         if not _handle_slash_command(conn, raw):
             return 0
+        print_next_hint()
+        print_menu()
 
 
 def _style_next(style: str) -> str:
@@ -543,18 +723,75 @@ def _wrap_lines(text: str, width: int) -> list[str]:
     return lines
 
 
-def _run_panel_ui(conn) -> int:
+def _run_panel_ui(conn, db_path: str | None) -> int:
     def app(stdscr):
+        def safe_add(win, y: int, x: int, text: str, width: int, attr: int = 0) -> None:
+            if width <= 0:
+                return
+            try:
+                win.addnstr(y, x, text, width, attr)
+            except curses.error:
+                return
+
         curses.curs_set(0)
+        onboarding_done = (get_config(conn, "ui.onboarding_done", "0") == "1")
+        screen = "home" if onboarding_done else "onboarding"
+        onboarding_step = 0
+        onboarding_total = 3
+        onboarding_setup_done = False
         selected = 0
+        home_selected = 0
         show_all = False
         status_msg = "Ready"
         status_level = "info"
+        home_items = [
+            "View pending drafts",
+            "View all drafts",
+            "Dry-run latest draft",
+            "Publish latest draft",
+            "Set publish command",
+            "Show slash command help",
+            "Run quick setup (current repo)",
+        ]
+        action_log: list[str] = []
 
         def set_status(msg: str, level: str = "info") -> None:
             nonlocal status_msg, status_level
             status_msg = msg
             status_level = level
+            action_log.insert(0, msg)
+            if len(action_log) > 8:
+                del action_log[8:]
+
+        def open_slash_prompt() -> bool:
+            h, w = stdscr.getmaxyx()
+            curses.echo()
+            curses.curs_set(1)
+            stdscr.move(h - 1, 0)
+            stdscr.clrtoeol()
+            stdscr.addstr(h - 1, 0, "/")
+            query = stdscr.getstr(h - 1, 1, w - 2).decode("utf-8", errors="ignore")
+            curses.noecho()
+            curses.curs_set(0)
+            logs: list[str] = []
+            keep = _handle_slash_command(conn, "/" + query, printer=logs.append)
+            set_status(logs[-1] if logs else "Command executed", "ok")
+            return keep
+
+        def publish_latest(dry_run: bool) -> None:
+            draft_id = _latest_publishable_draft_id(conn)
+            if draft_id is None:
+                set_status("No pending/failed draft found", "error")
+                return
+            cmd = get_config(conn, "publish.opencli_cmd", "opencli twitter post") or "opencli twitter post"
+            rc = _publish_one(conn, draft_id, cmd, dry_run=dry_run)
+            if rc == 0:
+                set_status(
+                    f"Latest draft #{draft_id} {'dry-run done' if dry_run else 'published'}",
+                    "ok",
+                )
+            else:
+                set_status(f"Latest draft #{draft_id} failed", "error")
 
         def draw_confirm(prompt: str) -> bool:
             h, w = stdscr.getmaxyx()
@@ -578,57 +815,286 @@ def _run_panel_ui(conn) -> int:
                 if ch in (ord("n"), ord("N"), 27):
                     return False
 
-        while True:
+        def draw_onboarding() -> None:
+            h, w = stdscr.getmaxyx()
+            stdscr.erase()
+            box_w = min(max(68, w - 10), w - 4)
+            box_h = min(max(14, h - 8), h - 4)
+            y0 = max(1, (h - box_h) // 2)
+            x0 = max(2, (w - box_w) // 2)
+            win = curses.newwin(box_h, box_w, y0, x0)
+            win.border()
+            safe_add(win, 1, 2, "Welcome to CodeCast", box_w - 4, curses.A_BOLD)
+            safe_add(win, 2, 2, f"Getting started ({onboarding_step + 1}/{onboarding_total})", box_w - 4)
+
+            if onboarding_step == 0:
+                lines = [
+                    "CodeCast helps developers turn every git push",
+                    "into a clear social update draft.",
+                    "",
+                    "You can review, dry-run, and publish from terminal UI.",
+                ]
+            elif onboarding_step == 1:
+                lines = [
+                    "Recommended workflow:",
+                    "1) git push in your repo",
+                    "2) open codecast",
+                    "3) review pending drafts and publish",
+                    "",
+                    "Need command mode? Press '/' in any screen.",
+                ]
+            else:
+                lines = [
+                    "Quick setup can do this for you now:",
+                    "- set publish command if missing",
+                    "- install post-push hook for current repo",
+                    "",
+                    "Press [s] to run quick setup now.",
+                    "Press [Enter] to continue without setup.",
+                ]
+                if onboarding_setup_done:
+                    lines.append("")
+                    lines.append("Quick setup has been executed.")
+
+            row = 4
+            for line in lines:
+                if row >= box_h - 4:
+                    break
+                safe_add(win, row, 3, line, box_w - 6)
+                row += 1
+
+            if onboarding_step < onboarding_total - 1:
+                footer = "[Enter] Next   [q] Quit"
+            else:
+                footer = "[s] Run setup   [Enter] Finish   [q] Quit"
+            safe_add(win, box_h - 2, 2, footer, box_w - 4, curses.A_REVERSE)
+            win.refresh()
+
+        def draw_home() -> None:
+            h, w = stdscr.getmaxyx()
+            stdscr.erase()
+            title = "CodeCast"
+            subtitle = "Turn every git push into a polished social update."
+            safe_add(stdscr, 1, 2, title, w - 4, curses.A_BOLD)
+            safe_add(stdscr, 2, 2, subtitle, w - 4)
+            safe_add(stdscr, 4, 2, "What it does:", w - 4, curses.A_BOLD)
+            bullets = [
+                "1) Collect changes from push/commit",
+                "2) Build social draft automatically",
+                "3) Let you dry-run / confirm publish",
+            ]
+            for i, line in enumerate(bullets):
+                safe_add(stdscr, 5 + i, 4, line, w - 8)
+            safe_add(stdscr, 9, 2, "Quick Actions:", w - 4, curses.A_BOLD)
+            for i, item in enumerate(home_items):
+                line = f"{i + 1}. {item}"
+                y = 10 + i
+                if y >= h - 10:
+                    break
+                if i == home_selected:
+                    stdscr.attron(curses.A_REVERSE)
+                    safe_add(stdscr, y, 4, line, w - 8)
+                    stdscr.attroff(curses.A_REVERSE)
+                else:
+                    safe_add(stdscr, y, 4, line, w - 8)
+
+            pending_count = count_drafts(conn, STATUS_PENDING)
+            failed_count = count_drafts(conn, STATUS_FAILED)
+            if pending_count > 0:
+                next_step = f"Recommended: Press 1 to review {pending_count} pending draft(s)."
+            elif failed_count > 0:
+                next_step = f"Recommended: Go to drafts and retry {failed_count} failed draft(s) with key x."
+            else:
+                next_step = "Recommended: Make a commit and git push, then reopen drafts."
+            safe_add(stdscr, h - 9, 2, next_step, w - 4, curses.A_BOLD)
+
+            safe_add(stdscr, h - 8, 2, "Recent Activity:", w - 4, curses.A_BOLD)
+            db_acts = list_recent_publish_activity(conn, limit=3)
+            line_y = h - 7
+            if db_acts:
+                for act in db_acts[:3]:
+                    dry = "dry-run" if int(act["dry_run"]) == 1 else "publish"
+                    rc = int(act["return_code"])
+                    repo = act["repo_name"] or "repo"
+                    line = f"- #{act['id']} draft {act['draft_id']} {dry} rc={rc} [{repo}]"
+                    safe_add(stdscr, line_y, 4, line, w - 8)
+                    line_y += 1
+                    if line_y >= h - 4:
+                        break
+            elif action_log:
+                for msg in action_log[:3]:
+                    safe_add(stdscr, line_y, 4, f"- {msg}", w - 8)
+                    line_y += 1
+                    if line_y >= h - 4:
+                        break
+            else:
+                safe_add(stdscr, line_y, 4, "- No activity yet", w - 8)
+            hint = "j/k or up/down move  Enter select  1-7 quick select  / command  q quit"
+            safe_add(stdscr, h - 3, 0, hint, w - 1, curses.A_REVERSE)
+            status_attr = curses.A_NORMAL
+            if status_level == "ok":
+                status_attr = curses.A_BOLD
+            elif status_level == "error":
+                status_attr = curses.A_REVERSE
+            safe_add(stdscr, h - 2, 0, f"Home | {status_msg}", w - 1, status_attr)
+            stdscr.refresh()
+
+        def handle_home_action(index: int) -> bool:
+            nonlocal screen, show_all, selected
+            if index == 0:
+                show_all = False
+                selected = 0
+                screen = "drafts"
+                set_status("Opened pending drafts")
+                return True
+            if index == 1:
+                show_all = True
+                selected = 0
+                screen = "drafts"
+                set_status("Opened all drafts")
+                return True
+            if index == 2:
+                publish_latest(dry_run=True)
+                return True
+            if index == 3:
+                draft_id = _latest_publishable_draft_id(conn)
+                if draft_id is None:
+                    set_status("No pending/failed draft found", "error")
+                    return True
+                if not draw_confirm(f"Publish latest draft #{draft_id}?"):
+                    set_status("Publish cancelled")
+                    return True
+                publish_latest(dry_run=False)
+                return True
+            if index == 4:
+                current_cmd = get_config(conn, "publish.opencli_cmd", "opencli twitter post") or "opencli twitter post"
+                h, w = stdscr.getmaxyx()
+                curses.echo()
+                curses.curs_set(1)
+                stdscr.move(h - 1, 0)
+                stdscr.clrtoeol()
+                stdscr.addstr(h - 1, 0, f"publish.opencli_cmd [{current_cmd}] > ")
+                value = stdscr.getstr().decode("utf-8", errors="ignore").strip()
+                curses.noecho()
+                curses.curs_set(0)
+                if value:
+                    set_config(conn, "publish.opencli_cmd", value)
+                    set_status("Publish command updated", "ok")
+                else:
+                    set_status("Config unchanged")
+                return True
+            if index == 5:
+                set_status("Try /help to list slash commands", "ok")
+                return True
+            if index == 6:
+                ok, msg = _run_quick_setup(conn, db_path, None)
+                set_status(msg, "ok" if ok else "error")
+                return True
+            return True
+
+        def draw_drafts() -> None:
+            nonlocal selected
+            h, w = stdscr.getmaxyx()
             rows = list_drafts(conn, status=None if show_all else STATUS_PENDING)
             if rows and selected >= len(rows):
                 selected = len(rows) - 1
             if selected < 0:
                 selected = 0
             stdscr.erase()
-            h, w = stdscr.getmaxyx()
             left_w = max(30, int(w * 0.44))
             split_x = left_w
-            title = "CodeCast Panel"
-            stdscr.addnstr(0, 0, title, w - 1)
+            title = "CodeCast Draft Workspace"
+            safe_add(stdscr, 0, 0, title, w - 1, curses.A_BOLD)
             for y in range(1, h - 3):
-                stdscr.addch(y, split_x, "|")
+                try:
+                    stdscr.addch(y, split_x, "|")
+                except curses.error:
+                    pass
             visible_rows = rows[: max(0, h - 4)]
             for i, row in enumerate(visible_rows):
                 line = f"[{row['id']}] {row['status']} {row['repo_name'] or 'multi-repo'} {row['style']}"
                 if i == selected:
                     stdscr.attron(curses.A_REVERSE)
-                    stdscr.addnstr(i + 1, 0, line, left_w - 1)
+                    safe_add(stdscr, i + 1, 0, line, left_w - 1)
                     stdscr.attroff(curses.A_REVERSE)
                 else:
-                    stdscr.addnstr(i + 1, 0, line, left_w - 1)
+                    safe_add(stdscr, i + 1, 0, line, left_w - 1)
             if rows:
                 draft = get_draft(conn, int(rows[selected]["id"]))
                 if draft:
-                    stdscr.addnstr(1, split_x + 2, f"Draft {draft['id']} | {draft['status']} | {draft['style']}", w - split_x - 3)
+                    safe_add(stdscr, 1, split_x + 2, f"Draft {draft['id']} | {draft['status']} | {draft['style']}", w - split_x - 3)
                     for i, line in enumerate(_wrap_lines(draft["content"], w - split_x - 3)[: h - 6]):
-                        stdscr.addnstr(i + 3, split_x + 2, line, w - split_x - 3)
+                        safe_add(stdscr, i + 3, split_x + 2, line, w - split_x - 3)
             else:
-                stdscr.addnstr(2, split_x + 2, "No drafts available.", w - split_x - 3)
-            hints = "j/k/↑/↓ move  Enter view  p publish  d dry-run  x retry-failed  h history  s style  a toggle  / cmd  q quit"
-            stdscr.addnstr(h - 3, 0, hints, w - 1, curses.A_REVERSE)
-            mode_text = f"Mode: {'ALL' if show_all else 'PENDING'}"
+                safe_add(stdscr, 2, split_x + 2, "No drafts available. Go back and run git push first.", w - split_x - 3)
+            hints = "j/k move  p publish  d dry-run  x retry  h history  s style  a toggle  b home  / cmd  q quit"
+            safe_add(stdscr, h - 3, 0, hints, w - 1, curses.A_REVERSE)
+            mode_text = f"Drafts: {'ALL' if show_all else 'PENDING'}"
             status_line = f"{mode_text} | {status_msg}"
             status_attr = curses.A_NORMAL
             if status_level == "ok":
                 status_attr = curses.A_BOLD
             elif status_level == "error":
                 status_attr = curses.A_REVERSE
-            stdscr.addnstr(h - 2, 0, status_line, w - 1, status_attr)
+            safe_add(stdscr, h - 2, 0, status_line, w - 1, status_attr)
             stdscr.refresh()
 
+        while True:
+            if screen == "onboarding":
+                draw_onboarding()
+            elif screen == "home":
+                draw_home()
+            else:
+                draw_drafts()
+            rows = list_drafts(conn, status=None if show_all else STATUS_PENDING)
             ch = stdscr.getch()
             if ch in (ord("q"), 27):
                 return
+            if screen == "onboarding":
+                if onboarding_step == onboarding_total - 1 and ch in (ord("s"), ord("S")):
+                    ok, msg = _run_quick_setup(conn, db_path, None)
+                    onboarding_setup_done = ok
+                    set_status(msg, "ok" if ok else "error")
+                    continue
+                if ch in (10, 13):
+                    if onboarding_step < onboarding_total - 1:
+                        onboarding_step += 1
+                    else:
+                        set_config(conn, "ui.onboarding_done", "1")
+                        screen = "home"
+                        set_status("Onboarding completed", "ok")
+                    continue
+                continue
+            if screen == "home":
+                if ch in (ord("j"), curses.KEY_DOWN):
+                    home_selected = min(home_selected + 1, len(home_items) - 1)
+                    continue
+                if ch in (ord("k"), curses.KEY_UP):
+                    home_selected = max(0, home_selected - 1)
+                    continue
+                if ch in (10, 13):
+                    if not handle_home_action(home_selected):
+                        return
+                    continue
+                if ch in (ord("1"), ord("2"), ord("3"), ord("4"), ord("5"), ord("6"), ord("7")):
+                    idx = int(chr(ch)) - 1
+                    if not handle_home_action(idx):
+                        return
+                    continue
+                if ch == ord("/"):
+                    if not open_slash_prompt():
+                        return
+                    continue
+                continue
             if ch in (ord("j"), curses.KEY_DOWN):
                 selected = min(selected + 1, max(0, len(rows) - 1))
                 continue
             if ch in (ord("k"), curses.KEY_UP):
                 selected = max(0, selected - 1)
+                continue
+            if ch == ord("b"):
+                screen = "home"
+                set_status("Back to home")
                 continue
             if ch == ord("a"):
                 show_all = not show_all
@@ -676,16 +1142,16 @@ def _run_panel_ui(conn) -> int:
                 while True:
                     win.erase()
                     win.border()
-                    win.addnstr(1, 2, f"Publish History (draft {draft_id})", width - 4, curses.A_BOLD)
+                    safe_add(win, 1, 2, f"Publish History (draft {draft_id})", width - 4, curses.A_BOLD)
                     row_y = 3
                     for lg in logs:
                         if row_y >= height - 2:
                             break
                         kind = "dry" if int(lg["dry_run"]) == 1 else "post"
                         line = f"#{lg['id']} rc={lg['return_code']} {kind} {lg['attempted_at']}"
-                        win.addnstr(row_y, 2, line, width - 4)
+                        safe_add(win, row_y, 2, line, width - 4)
                         row_y += 1
-                    win.addnstr(height - 2, 2, "Press any key to close", width - 4, curses.A_REVERSE)
+                    safe_add(win, height - 2, 2, "Press any key to close", width - 4, curses.A_REVERSE)
                     win.refresh()
                     _ = win.getch()
                     break
@@ -729,22 +1195,15 @@ def _run_panel_ui(conn) -> int:
                 set_status("Published" if rc == 0 else "Publish failed", "ok" if rc == 0 else "error")
                 continue
             if ch == ord("/"):
-                curses.echo()
-                curses.curs_set(1)
-                stdscr.move(h - 1, 0)
-                stdscr.clrtoeol()
-                stdscr.addstr(h - 1, 0, "/")
-                query = stdscr.getstr(h - 1, 1, w - 2).decode("utf-8", errors="ignore")
-                curses.noecho()
-                curses.curs_set(0)
-                logs: list[str] = []
-                keep = _handle_slash_command(conn, "/" + query, printer=logs.append)
-                set_status(logs[-1] if logs else "Command executed", "ok")
-                if not keep:
+                if not open_slash_prompt():
                     return
                 continue
 
-    curses.wrapper(app)
+    try:
+        curses.wrapper(app)
+    except curses.error:
+        _print("Terminal panel rendering is not supported in this terminal; switched to plain mode.")
+        return _run_line_ui(conn)
     return 0
 
 
@@ -752,9 +1211,10 @@ def cmd_ui(args: argparse.Namespace) -> int:
     conn = connect(args.db_path)
     init_db(conn)
     plain = bool(getattr(args, "plain", False))
-    if plain or not sys.stdin.isatty() or not sys.stdout.isatty():
+    term = os.getenv("TERM", "").lower()
+    if plain or term in ("", "dumb", "unknown") or not sys.stdin.isatty() or not sys.stdout.isatty():
         return _run_line_ui(conn)
-    return _run_panel_ui(conn)
+    return _run_panel_ui(conn, args.db_path)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -804,6 +1264,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_hook = sub.add_parser("install-hook", help="Install post-push hook for a repo")
     p_hook.add_argument("--repo", help="Git repository path (default: current repo)")
     p_hook.set_defaults(func=cmd_install_hook)
+
+    p_setup = sub.add_parser("setup", help="Quick setup: config publish command and install hook")
+    p_setup.add_argument("--repo", help="Git repository path (default: detect current repo)")
+    p_setup.set_defaults(func=cmd_setup)
+
+    p_onboarding = sub.add_parser("onboarding", help="Manage onboarding state")
+    onboarding_sub = p_onboarding.add_subparsers(dest="onboarding_command", required=True)
+    p_onboarding_status = onboarding_sub.add_parser("status", help="Show onboarding state")
+    p_onboarding_status.set_defaults(func=cmd_onboarding_status)
+    p_onboarding_reset = onboarding_sub.add_parser("reset", help="Reset onboarding to show again")
+    p_onboarding_reset.set_defaults(func=cmd_onboarding_reset)
+    p_onboarding_complete = onboarding_sub.add_parser("complete", help="Mark onboarding as completed")
+    p_onboarding_complete.set_defaults(func=cmd_onboarding_complete)
 
     p_config = sub.add_parser("config", help="Global config")
     config_sub = p_config.add_subparsers(dest="config_command", required=True)

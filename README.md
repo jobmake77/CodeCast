@@ -89,9 +89,22 @@ PYTHONPATH=src python3 -m codecast.cli
 Run once:
 
 ```bash
+codecast setup
 codecast init
 codecast config set --key publish.opencli_cmd --value "opencli twitter post"
 codecast install-hook --repo /path/to/your/repo
+```
+
+Or one-shot setup for a target repo:
+
+```bash
+codecast setup --repo /path/to/your/repo
+```
+
+Reset first-launch onboarding wizard:
+
+```bash
+codecast onboarding reset
 ```
 
 Then in your dev repo:
@@ -112,11 +125,27 @@ codecast
 
 `codecast` opens panel mode by default.
 
+On first launch, CodeCast shows a short onboarding wizard (3 steps),
+then enters Home automatically. You can run quick setup during onboarding.
+
+Startup now opens a guided Home screen first:
+
+- What CodeCast does
+- Quick actions (view drafts, dry-run, publish latest, set command)
+- Number shortcuts (`1-7`) and `Enter` selection
+- Recommended next step based on your draft state
+- Recent activity panel (latest publish/dry-run records)
+- `/` to run slash commands directly
+
+If panel rendering is unavailable in your terminal, CodeCast automatically
+falls back to plain mode with the same Home menu (number selection + slash commands).
+
 ### Key bindings
 
 ```text
 j / k / ↑ / ↓  Move selection
 p              Publish selected draft (with confirm popup)
+b              Back to Home screen (from draft workspace)
 d              Dry-run selected draft
 x              Retry selected FAILED draft
 h              Open publish history popup
@@ -145,6 +174,9 @@ q              Quit
 
 ```bash
 codecast init
+codecast setup --repo /repo/a
+codecast onboarding status
+codecast onboarding reset
 codecast collect --repo /path/to/repo --oldrev <old_sha> --newrev <new_sha>
 codecast drafts list --all
 codecast drafts render --draft 1 --style friendly
