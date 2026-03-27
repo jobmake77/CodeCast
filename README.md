@@ -123,7 +123,8 @@ codecast
 
 ## Panel UI
 
-`codecast` opens panel mode by default.
+`codecast` opens plain guided mode by default (most stable across terminals).
+Use `codecast cast` if you want panel mode.
 
 On first launch, CodeCast shows a short onboarding wizard (3 steps),
 then enters Home automatically. You can run quick setup during onboarding.

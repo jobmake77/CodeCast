@@ -586,49 +586,59 @@ def _handle_slash_command(conn, raw: str, printer=_print) -> bool:
 
 
 def _run_line_ui(conn) -> int:
-    _print("CodeCast Interactive UI")
-    _print("Welcome. Type a word command (no single-letter shortcuts). Type /exit to quit.")
-    menu = [
-        ("pending", "View pending drafts"),
-        ("all", "View all drafts"),
-        ("dry-run", "Dry-run latest draft"),
-        ("publish", "Publish latest draft"),
-        ("setup", "Quick setup (current repo)"),
-        ("help", "Show slash command help"),
-        ("refresh", "Refresh home"),
-        ("exit", "Exit"),
-    ]
+    _print("CodeCast Client (plain mode)")
+    _print("A persistent terminal client. No auto full-screen refresh.")
+    _print("Type 'help' for commands. Type 'exit' to quit.")
+    mode = "home"
+    selected_draft_id = _latest_publishable_draft_id(conn)
 
-    def print_menu() -> None:
+    def _pick_draft(arg: str | None = None) -> int | None:
+        nonlocal selected_draft_id
+        if arg:
+            if arg == "latest":
+                selected_draft_id = _latest_publishable_draft_id(conn)
+            else:
+                try:
+                    selected_draft_id = int(arg)
+                except ValueError:
+                    _print("draft id must be integer or 'latest'")
+                    return None
+        if selected_draft_id is None:
+            selected_draft_id = _latest_publishable_draft_id(conn)
+        return selected_draft_id
+
+    def print_status() -> None:
         pending_count = count_drafts(conn, STATUS_PENDING)
         failed_count = count_drafts(conn, STATUS_FAILED)
-        _print("")
-        _print("==== Home ====")
-        _print(f"Pending drafts: {pending_count} | Failed drafts: {failed_count}")
-        if pending_count > 0:
-            _print("Recommended: type 'pending' to review pending drafts.")
-        elif failed_count > 0:
-            _print("Recommended: type 'all' then '/retry latest'.")
-        else:
-            _print("Recommended: push code first, then return here.")
-        for cmd, desc in menu:
-            _print(f"- {cmd:8s} : {desc}")
+        selected_text = str(selected_draft_id) if selected_draft_id is not None else "-"
+        _print(
+            f"[status] mode={mode} pending={pending_count} failed={failed_count} selected={selected_text}"
+        )
 
-    def print_next_hint() -> None:
-        pending_count = count_drafts(conn, STATUS_PENDING)
-        failed_count = count_drafts(conn, STATUS_FAILED)
-        if pending_count > 0:
-            _print("Next: type 'pending' to review drafts, then 'dry-run'.")
-            return
-        if failed_count > 0:
-            _print("Next: type 'all' to list drafts, then '/retry latest'.")
-            return
-        _print("Next: create a commit and push, then type 'pending'.")
+    def print_help() -> None:
+        _print("Commands:")
+        _print("  status                       Show client status")
+        _print("  pending                      List pending drafts")
+        _print("  all                          List all drafts")
+        _print("  select <id|latest>           Select current draft")
+        _print("  show [id|latest]             Show draft content")
+        _print("  style <formal|friendly|punchy> [id]  Re-render draft style")
+        _print("  dry-run [id|latest]          Dry-run publish")
+        _print("  publish [id|latest]          Publish with confirmation")
+        _print("  retry [id|latest]            Retry FAILED draft")
+        _print("  history [id|latest] [limit]  Show publish logs")
+        _print("  setup                        Run quick setup")
+        _print("  config                       Show config")
+        _print("  config set <key> <value>     Set config")
+        _print("  help                         Show this help")
+        _print("  exit                         Exit client")
+        _print("  /...                         Slash commands also supported")
 
-    print_menu()
+    print_status()
+    print_help()
     while True:
         try:
-            raw = input("codecast> ").strip()
+            raw = input(f"codecast({mode})> ").strip()
         except EOFError:
             _print("")
             return 0
@@ -637,77 +647,159 @@ def _run_line_ui(conn) -> int:
             return 130
         if not raw:
             continue
-        normalized = raw.strip().lower()
-        if normalized in {"pending", "all", "dry-run", "publish", "setup", "help", "refresh", "exit"}:
-            if normalized == "pending":
-                rows = list_drafts(conn, status=STATUS_PENDING)
-                if not rows:
-                    _print("No pending drafts.")
-                else:
-                    for row in rows:
-                        _print(_format_draft_row(row))
-                print_next_hint()
-                print_menu()
-                continue
-            if normalized == "all":
-                rows = list_drafts(conn, status=None)
-                if not rows:
-                    _print("No drafts found.")
-                else:
-                    for row in rows:
-                        _print(_format_draft_row(row))
-                print_next_hint()
-                print_menu()
-                continue
-            if normalized == "dry-run":
-                draft_id = _latest_publishable_draft_id(conn)
-                if draft_id is None:
-                    _print("No pending/failed drafts to dry-run.")
-                    print_next_hint()
-                    print_menu()
-                    continue
-                configured_cmd = get_config(conn, "publish.opencli_cmd", "opencli twitter post") or "opencli twitter post"
-                _publish_one(conn, draft_id, configured_cmd, dry_run=True)
-                print_next_hint()
-                print_menu()
-                continue
-            if normalized == "publish":
-                draft_id = _latest_publishable_draft_id(conn)
-                if draft_id is None:
-                    _print("No pending/failed drafts to publish.")
-                    print_next_hint()
-                    print_menu()
-                    continue
-                confirm = input(f"Publish latest draft #{draft_id}? (y/N): ").strip().lower()
-                if confirm != "y":
-                    _print("Publish cancelled.")
-                    print_next_hint()
-                    print_menu()
-                    continue
-                configured_cmd = get_config(conn, "publish.opencli_cmd", "opencli twitter post") or "opencli twitter post"
-                _publish_one(conn, draft_id, configured_cmd, dry_run=False)
-                print_next_hint()
-                print_menu()
-                continue
-            if normalized == "setup":
-                ok, msg = _run_quick_setup(conn, None, None)
-                _print(f"Quick setup {'completed' if ok else 'failed'}: {msg}")
-                print_next_hint()
-                print_menu()
-                continue
-            if normalized == "help":
-                _ui_help()
-                print_menu()
-                continue
-            if normalized == "refresh":
-                print_menu()
-                continue
-            if normalized == "exit":
+        if raw.startswith("/"):
+            if not _handle_slash_command(conn, raw):
                 return 0
-        if not _handle_slash_command(conn, raw):
+            continue
+        parts = shlex.split(raw)
+        cmd = parts[0].lower()
+        args = parts[1:]
+
+        if cmd == "exit":
             return 0
-        print_next_hint()
-        print_menu()
+        if cmd == "help":
+            print_help()
+            continue
+        if cmd == "status":
+            print_status()
+            continue
+        if cmd == "pending":
+            mode = "drafts"
+            rows = list_drafts(conn, status=STATUS_PENDING)
+            if not rows:
+                _print("No pending drafts.")
+            else:
+                for row in rows:
+                    _print(_format_draft_row(row))
+            continue
+        if cmd == "all":
+            mode = "drafts"
+            rows = list_drafts(conn, status=None)
+            if not rows:
+                _print("No drafts found.")
+            else:
+                for row in rows:
+                    _print(_format_draft_row(row))
+            continue
+        if cmd == "select":
+            if not args:
+                _print("Usage: select <id|latest>")
+                continue
+            draft_id = _pick_draft(args[0])
+            if draft_id is None:
+                continue
+            draft = get_draft(conn, draft_id)
+            if not draft:
+                _print(f"Draft {draft_id} not found.")
+                continue
+            _print(f"Selected draft {draft_id}")
+            continue
+        if cmd in ("show", "view"):
+            draft_id = _pick_draft(args[0]) if args else _pick_draft()
+            if draft_id is None:
+                _print("No draft selected.")
+                continue
+            _rerender_and_print(conn, draft_id, None)
+            continue
+        if cmd == "style":
+            if not args:
+                _print("Usage: style <formal|friendly|punchy> [id]")
+                continue
+            style = args[0]
+            if style not in STYLE_VALUES:
+                _print("style must be one of: formal, friendly, punchy")
+                continue
+            draft_id = _pick_draft(args[1]) if len(args) > 1 else _pick_draft()
+            if draft_id is None:
+                _print("No draft selected.")
+                continue
+            rerender_draft(conn, draft_id, style)
+            _print(f"Draft {draft_id} style updated to {style}")
+            continue
+        if cmd == "dry-run":
+            draft_id = _pick_draft(args[0]) if args else _pick_draft()
+            if draft_id is None:
+                _print("No pending/failed drafts to dry-run.")
+                continue
+            configured_cmd = get_config(conn, "publish.opencli_cmd", "opencli twitter post") or "opencli twitter post"
+            _publish_one(conn, draft_id, configured_cmd, dry_run=True)
+            continue
+        if cmd == "publish":
+            draft_id = _pick_draft(args[0]) if args else _pick_draft()
+            if draft_id is None:
+                _print("No pending/failed drafts to publish.")
+                continue
+            confirm = input(f"Publish draft #{draft_id}? (yes/no): ").strip().lower()
+            if confirm not in ("yes", "y"):
+                _print("Publish cancelled.")
+                continue
+            configured_cmd = get_config(conn, "publish.opencli_cmd", "opencli twitter post") or "opencli twitter post"
+            _publish_one(conn, draft_id, configured_cmd, dry_run=False)
+            continue
+        if cmd == "retry":
+            draft_id = _pick_draft(args[0]) if args else _pick_draft("latest")
+            if draft_id is None:
+                _print("No draft available.")
+                continue
+            draft = get_draft(conn, draft_id)
+            if not draft:
+                _print(f"Draft {draft_id} not found.")
+                continue
+            if draft["status"] != STATUS_FAILED:
+                _print(f"Draft {draft_id} is not FAILED (current={draft['status']}).")
+                continue
+            configured_cmd = get_config(conn, "publish.opencli_cmd", "opencli twitter post") or "opencli twitter post"
+            _publish_one(conn, draft_id, configured_cmd, dry_run=False)
+            continue
+        if cmd == "history":
+            draft_id = _pick_draft(args[0]) if args else _pick_draft()
+            if draft_id is None:
+                _print("No draft selected.")
+                continue
+            limit = 10
+            if len(args) >= 2:
+                try:
+                    limit = max(1, int(args[1]))
+                except ValueError:
+                    _print("limit must be integer")
+                    continue
+            logs = list_publish_logs(conn, draft_id, limit=limit)
+            if not logs:
+                _print(f"No publish logs for draft {draft_id}.")
+                continue
+            for log in logs:
+                kind = "dry-run" if int(log["dry_run"]) == 1 else "publish"
+                _print(f"[{log['id']}] draft={draft_id} rc={log['return_code']} {kind} at {log['attempted_at']}")
+                if log["stderr"]:
+                    _print(f"  stderr: {str(log['stderr']).strip()[:140]}")
+                elif log["stdout"]:
+                    _print(f"  stdout: {str(log['stdout']).strip()[:140]}")
+            continue
+        if cmd == "setup":
+            ok, msg = _run_quick_setup(conn, None, None)
+            _print(f"Quick setup {'completed' if ok else 'failed'}: {msg}")
+            continue
+        if cmd == "config":
+            if not args:
+                rows = list_config(conn)
+                if not rows:
+                    _print("No config found.")
+                else:
+                    for row in rows:
+                        _print(f"{row['key']}={row['value']}")
+                continue
+            if args[0] == "set":
+                if len(args) < 3:
+                    _print("Usage: config set <key> <value>")
+                    continue
+                key = args[1]
+                value = " ".join(args[2:])
+                set_config(conn, key, value)
+                _print(f"Config saved: {key}={value}")
+                continue
+            _print("Usage: config [set <key> <value>]")
+            continue
+        _print("Unknown command. Type 'help' or use slash commands like /pending.")
 
 
 def _style_next(style: str) -> str:
@@ -1211,8 +1303,12 @@ def cmd_ui(args: argparse.Namespace) -> int:
     conn = connect(args.db_path)
     init_db(conn)
     plain = bool(getattr(args, "plain", False))
+    panel = bool(getattr(args, "panel", False))
     term = os.getenv("TERM", "").lower()
-    if plain or term in ("", "dumb", "unknown") or not sys.stdin.isatty() or not sys.stdout.isatty():
+    if not panel and (plain or term in ("", "dumb", "unknown") or not sys.stdin.isatty() or not sys.stdout.isatty()):
+        return _run_line_ui(conn)
+    if not panel:
+        # Safe default: prefer plain guided mode to avoid terminal-specific rendering issues.
         return _run_line_ui(conn)
     return _run_panel_ui(conn, args.db_path)
 
@@ -1222,7 +1318,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--db-path", help="Override sqlite database path")
     parser.add_argument("--version", action="version", version=f"codecast {__version__}")
     sub = parser.add_subparsers(dest="command", required=False)
-    parser.set_defaults(func=cmd_ui, plain=False)
+    parser.set_defaults(func=cmd_ui, plain=True, panel=False)
 
     p_init = sub.add_parser("init", help="Initialize database")
     p_init.set_defaults(func=cmd_init)
@@ -1290,11 +1386,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_ui = sub.add_parser("ui", help="Open interactive terminal UI")
     p_ui.add_argument("--plain", action="store_true", help="Force slash-command plain mode")
+    p_ui.add_argument("--panel", action="store_true", help="Force panel mode")
     p_ui.set_defaults(func=cmd_ui)
 
     p_cast = sub.add_parser("cast", help="Open panel mode UI (Cloud-Code style)")
     p_cast.add_argument("--plain", action="store_true", help="Force slash-command plain mode")
-    p_cast.set_defaults(func=cmd_ui)
+    p_cast.set_defaults(func=cmd_ui, panel=True)
     return parser
 
 

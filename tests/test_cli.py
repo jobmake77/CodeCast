@@ -194,7 +194,7 @@ class CodeCastCLITest(unittest.TestCase):
             cwd="/Users/a77/Desktop/CodeCast",
         )
         self.assertEqual(proc.returncode, 0)
-        self.assertIn("CodeCast Interactive UI", proc.stdout)
+        self.assertIn("CodeCast Client (plain mode)", proc.stdout)
 
     def test_default_command_enters_ui(self) -> None:
         env = os.environ.copy()
@@ -214,7 +214,7 @@ class CodeCastCLITest(unittest.TestCase):
             cwd="/Users/a77/Desktop/CodeCast",
         )
         self.assertEqual(proc.returncode, 0)
-        self.assertIn("CodeCast Interactive UI", proc.stdout)
+        self.assertIn("CodeCast Client (plain mode)", proc.stdout)
 
 
 if __name__ == "__main__":
