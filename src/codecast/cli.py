@@ -1479,6 +1479,13 @@ def cmd_ui(args: argparse.Namespace) -> int:
     return _run_panel_ui(conn, args.db_path)
 
 
+def cmd_restart(args: argparse.Namespace) -> int:
+    _print("Restarting CodeCast client...")
+    args.plain = bool(getattr(args, "plain", True))
+    args.panel = bool(getattr(args, "panel", False))
+    return cmd_ui(args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="codecast", description="CodeCast MVP CLI")
     parser.add_argument("--db-path", help="Override sqlite database path")
@@ -1558,6 +1565,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_cast = sub.add_parser("cast", help="Open panel mode UI (Cloud-Code style)")
     p_cast.add_argument("--plain", action="store_true", help="Force slash-command plain mode")
     p_cast.set_defaults(func=cmd_ui, panel=True)
+
+    p_restart = sub.add_parser("restart", help="Restart client and open UI")
+    p_restart.add_argument("--plain", action="store_true", help="Restart to plain mode (default)")
+    p_restart.add_argument("--panel", action="store_true", help="Restart to panel mode")
+    p_restart.set_defaults(func=cmd_restart, plain=True, panel=False)
     return parser
 
 

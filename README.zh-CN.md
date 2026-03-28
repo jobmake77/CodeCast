@@ -190,6 +190,7 @@ codecast settings set --repo /repo/a --every-n-pushes 10 --default-style friendl
 codecast install-hook --repo /repo/a
 codecast ui --plain
 codecast cast
+codecast restart
 ```
 
 ## 配置项

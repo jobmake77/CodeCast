@@ -343,6 +343,28 @@ class CodeCastCLITest(unittest.TestCase):
         self.assertIn("All commands:", proc.stdout)
         self.assertIn("main: do", proc.stdout)
 
+    def test_restart_command_enters_ui(self) -> None:
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(Path("/Users/a77/Desktop/CodeCast/src"))
+        proc = subprocess.run(
+            [
+                "python3",
+                "-m",
+                "codecast.cli",
+                "--db-path",
+                str(self.db_path),
+                "restart",
+            ],
+            input="exit\n",
+            text=True,
+            capture_output=True,
+            env=env,
+            cwd="/Users/a77/Desktop/CodeCast",
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("Restarting CodeCast client...", proc.stdout)
+        self.assertIn("CodeCast client", proc.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
