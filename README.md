@@ -44,12 +44,16 @@ flowchart LR
 Persistent terminal client (default entry: `codecast`):
 
 ```text
-CodeCast Client (plain mode)
-[status] mode=home pending=1 failed=0 selected=12
-codecast(home)> pending
-codecast(drafts)> show latest
-codecast(drafts)> dry-run latest
-codecast(drafts)> publish latest
+CodeCast client
+single-focus home loaded
+
+CodeCast
+[status] pending=1 failed=0 selected=12
+next: review
+main: do    secondary: pending    menu: more
+codecast(home)> do
+codecast(review)> do
+codecast(review)> do
 ```
 
 ## Features
@@ -124,12 +128,22 @@ codecast
 `codecast` opens plain client mode by default (most stable across terminals).
 Use `codecast cast` if you want panel mode.
 
-On first launch, CodeCast shows a short onboarding wizard (3 steps),
-then enters Home automatically. You can run quick setup during onboarding.
+Default startup is a single-focus home:
+- one status line
+- one recommended next action
+- one secondary action (`pending`)
+- one advanced entry (`more`)
+
+You can always return to this home with `back`.
 
 ### Client Commands (word-based)
 
 ```text
+do
+more
+back
+help
+help full
 status
 pending
 all
@@ -143,7 +157,6 @@ history [id|latest] [limit]
 setup
 config
 config set <key> <value>
-help
 exit
 ```
 

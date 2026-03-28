@@ -8,7 +8,7 @@ import subprocess
 import os
 
 from codecast.cli import main
-from codecast.storage import STATUS_ARCHIVED, STATUS_PENDING, connect, get_draft, init_db
+from codecast.storage import STATUS_ARCHIVED, STATUS_FAILED, STATUS_PENDING, connect, get_draft, init_db
 
 
 def git(repo: Path, *args: str) -> str:
@@ -194,7 +194,9 @@ class CodeCastCLITest(unittest.TestCase):
             cwd="/Users/a77/Desktop/CodeCast",
         )
         self.assertEqual(proc.returncode, 0)
-        self.assertIn("CodeCast Client (plain mode)", proc.stdout)
+        self.assertIn("CodeCast client", proc.stdout)
+        self.assertIn("next:", proc.stdout)
+        self.assertNotIn("All commands:", proc.stdout)
 
     def test_default_command_enters_ui(self) -> None:
         env = os.environ.copy()
@@ -214,7 +216,132 @@ class CodeCastCLITest(unittest.TestCase):
             cwd="/Users/a77/Desktop/CodeCast",
         )
         self.assertEqual(proc.returncode, 0)
-        self.assertIn("CodeCast Client (plain mode)", proc.stdout)
+        self.assertIn("CodeCast client", proc.stdout)
+
+    def test_ui_do_reviews_when_pending_exists(self) -> None:
+        self.assertEqual(main(["--db-path", str(self.db_path), "init"]), 0)
+        c2 = git(self.repo, "rev-parse", "HEAD~1")
+        c3 = git(self.repo, "rev-parse", "HEAD")
+        self.assertEqual(
+            main(
+                [
+                    "--db-path",
+                    str(self.db_path),
+                    "collect",
+                    "--repo",
+                    str(self.repo),
+                    "--oldrev",
+                    c2,
+                    "--newrev",
+                    c3,
+                ]
+            ),
+            0,
+        )
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(Path("/Users/a77/Desktop/CodeCast/src"))
+        proc = subprocess.run(
+            [
+                "python3",
+                "-m",
+                "codecast.cli",
+                "--db-path",
+                str(self.db_path),
+                "ui",
+            ],
+            input="do\nexit\n",
+            text=True,
+            capture_output=True,
+            env=env,
+            cwd="/Users/a77/Desktop/CodeCast",
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("Opened draft #", proc.stdout)
+
+    def test_ui_do_retries_when_only_failed_exists(self) -> None:
+        self.assertEqual(main(["--db-path", str(self.db_path), "init"]), 0)
+        c2 = git(self.repo, "rev-parse", "HEAD~1")
+        c3 = git(self.repo, "rev-parse", "HEAD")
+        self.assertEqual(
+            main(
+                [
+                    "--db-path",
+                    str(self.db_path),
+                    "collect",
+                    "--repo",
+                    str(self.repo),
+                    "--oldrev",
+                    c2,
+                    "--newrev",
+                    c3,
+                ]
+            ),
+            0,
+        )
+        conn = connect(str(self.db_path))
+        init_db(conn)
+        row = conn.execute("SELECT id FROM drafts ORDER BY id DESC LIMIT 1").fetchone()
+        assert row is not None
+        draft_id = int(row["id"])
+        conn.execute("UPDATE drafts SET status = ? WHERE id = ?", (STATUS_FAILED, draft_id))
+        conn.commit()
+        self.assertEqual(
+            main(
+                [
+                    "--db-path",
+                    str(self.db_path),
+                    "config",
+                    "set",
+                    "--key",
+                    "publish.opencli_cmd",
+                    "--value",
+                    "/usr/bin/false",
+                ]
+            ),
+            0,
+        )
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(Path("/Users/a77/Desktop/CodeCast/src"))
+        proc = subprocess.run(
+            [
+                "python3",
+                "-m",
+                "codecast.cli",
+                "--db-path",
+                str(self.db_path),
+                "ui",
+            ],
+            input="do\nexit\n",
+            text=True,
+            capture_output=True,
+            env=env,
+            cwd="/Users/a77/Desktop/CodeCast",
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("Failed publishing draft", proc.stdout)
+
+    def test_ui_navigation_more_help_full_back(self) -> None:
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(Path("/Users/a77/Desktop/CodeCast/src"))
+        proc = subprocess.run(
+            [
+                "python3",
+                "-m",
+                "codecast.cli",
+                "--db-path",
+                str(self.db_path),
+                "ui",
+            ],
+            input="more\nhelp full\nback\nexit\n",
+            text=True,
+            capture_output=True,
+            env=env,
+            cwd="/Users/a77/Desktop/CodeCast",
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("More commands:", proc.stdout)
+        self.assertIn("All commands:", proc.stdout)
+        self.assertIn("main: do", proc.stdout)
 
 
 if __name__ == "__main__":

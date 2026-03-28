@@ -7,6 +7,7 @@ import shutil
 import shlex
 import sys
 import textwrap
+import time
 from typing import Iterable
 
 from . import __version__
@@ -586,14 +587,26 @@ def _handle_slash_command(conn, raw: str, printer=_print) -> bool:
 
 
 def _run_line_ui(conn) -> int:
-    _print("CodeCast Client (plain mode)")
-    _print("A persistent terminal client. No auto full-screen refresh.")
-    _print("Type 'help' for commands. Type 'exit' to quit.")
     mode = "home"
     selected_draft_id = _latest_publishable_draft_id(conn)
+    review_ready_for_publish = False
+
+    def _latest_pending_draft_id() -> int | None:
+        row = conn.execute(
+            "SELECT id FROM drafts WHERE status = ? ORDER BY id DESC LIMIT 1",
+            (STATUS_PENDING,),
+        ).fetchone()
+        return int(row["id"]) if row else None
+
+    def _latest_failed_draft_id() -> int | None:
+        row = conn.execute(
+            "SELECT id FROM drafts WHERE status = ? ORDER BY id DESC LIMIT 1",
+            (STATUS_FAILED,),
+        ).fetchone()
+        return int(row["id"]) if row else None
 
     def _pick_draft(arg: str | None = None) -> int | None:
-        nonlocal selected_draft_id
+        nonlocal selected_draft_id, review_ready_for_publish
         if arg:
             if arg == "latest":
                 selected_draft_id = _latest_publishable_draft_id(conn)
@@ -605,19 +618,59 @@ def _run_line_ui(conn) -> int:
                     return None
         if selected_draft_id is None:
             selected_draft_id = _latest_publishable_draft_id(conn)
+        review_ready_for_publish = False
         return selected_draft_id
 
-    def print_status() -> None:
+    def print_status_line() -> None:
         pending_count = count_drafts(conn, STATUS_PENDING)
         failed_count = count_drafts(conn, STATUS_FAILED)
         selected_text = str(selected_draft_id) if selected_draft_id is not None else "-"
-        _print(
-            f"[status] mode={mode} pending={pending_count} failed={failed_count} selected={selected_text}"
-        )
+        _print(f"[status] pending={pending_count} failed={failed_count} selected={selected_text}")
 
-    def print_help() -> None:
-        _print("Commands:")
-        _print("  status                       Show client status")
+    def _recommended_action() -> tuple[str, str]:
+        pending_count = count_drafts(conn, STATUS_PENDING)
+        failed_count = count_drafts(conn, STATUS_FAILED)
+        if mode == "review" and selected_draft_id is not None:
+            draft = get_draft(conn, selected_draft_id)
+            if draft and draft["status"] == STATUS_FAILED:
+                return ("retry selected", "Retry this failed draft")
+            if review_ready_for_publish:
+                return ("publish selected", "Publish the selected draft")
+            return ("dry-run selected", "Preview publish command before posting")
+        if pending_count > 0:
+            return ("review", "Open latest pending draft")
+        if failed_count > 0:
+            return ("retry latest failed", "Retry the latest failed draft")
+        if not get_config(conn, "publish.opencli_cmd"):
+            return ("run setup", "Finish quick setup")
+        return ("wait for push", "No pending drafts yet")
+
+    def print_home() -> None:
+        action_key, action_desc = _recommended_action()
+        _print("")
+        _print("CodeCast")
+        print_status_line()
+        _print(f"next: {action_key}")
+        _print(f"main: do    secondary: pending    menu: more")
+        _print(f"hint: {action_desc}")
+
+    def print_compact_help() -> None:
+        _print("High-frequency commands:")
+        _print("  do")
+        _print("  pending")
+        _print("  show [latest|id]")
+        _print("  publish [latest|id]")
+        _print("  retry [latest|id]")
+        _print("  more")
+        _print("  exit")
+        _print("Use 'help full' for all commands.")
+
+    def print_full_help() -> None:
+        _print("All commands:")
+        _print("  do                           Run recommended main action")
+        _print("  more                         Show advanced command groups")
+        _print("  back                         Return to single-focus home")
+        _print("  status                       Show status summary")
         _print("  pending                      List pending drafts")
         _print("  all                          List all drafts")
         _print("  select <id|latest>           Select current draft")
@@ -630,12 +683,90 @@ def _run_line_ui(conn) -> int:
         _print("  setup                        Run quick setup")
         _print("  config                       Show config")
         _print("  config set <key> <value>     Set config")
-        _print("  help                         Show this help")
+        _print("  help                         Show compact help")
+        _print("  help full                    Show full command list")
         _print("  exit                         Exit client")
         _print("  /...                         Slash commands also supported")
 
-    print_status()
-    print_help()
+    def print_more() -> None:
+        _print("More commands:")
+        _print("  drafts: pending, all, select, show, style")
+        _print("  publish: dry-run, publish, retry, history")
+        _print("  config: setup, config, config set")
+        _print("  navigation: do, back, help full, exit")
+
+    def _run_do() -> None:
+        nonlocal mode, selected_draft_id, review_ready_for_publish
+        action_key, _ = _recommended_action()
+        if action_key == "review":
+            draft_id = _latest_pending_draft_id()
+            if draft_id is None:
+                _print("No pending draft found.")
+                print_status_line()
+                return
+            mode = "review"
+            selected_draft_id = draft_id
+            review_ready_for_publish = False
+            _print(f"Opened draft #{draft_id} for review.")
+            _rerender_and_print(conn, draft_id, None)
+            return
+        if action_key == "retry latest failed":
+            draft_id = _latest_failed_draft_id()
+            if draft_id is None:
+                _print("No failed draft found.")
+                print_status_line()
+                return
+            configured_cmd = get_config(conn, "publish.opencli_cmd", "opencli twitter post") or "opencli twitter post"
+            _publish_one(conn, draft_id, configured_cmd, dry_run=False)
+            print_status_line()
+            return
+        if action_key == "run setup":
+            ok, msg = _run_quick_setup(conn, None, None)
+            _print(f"Quick setup {'completed' if ok else 'failed'}: {msg}")
+            print_status_line()
+            return
+        if action_key == "wait for push":
+            _print("No pending drafts. Push code in your repo and come back.")
+            print_status_line()
+            return
+        if action_key == "retry selected":
+            if selected_draft_id is None:
+                _print("No draft selected.")
+                return
+            configured_cmd = get_config(conn, "publish.opencli_cmd", "opencli twitter post") or "opencli twitter post"
+            _publish_one(conn, selected_draft_id, configured_cmd, dry_run=False)
+            print_status_line()
+            return
+        if action_key == "dry-run selected":
+            if selected_draft_id is None:
+                _print("No draft selected.")
+                return
+            configured_cmd = get_config(conn, "publish.opencli_cmd", "opencli twitter post") or "opencli twitter post"
+            rc = _publish_one(conn, selected_draft_id, configured_cmd, dry_run=True)
+            review_ready_for_publish = rc == 0
+            print_status_line()
+            return
+        if action_key == "publish selected":
+            if selected_draft_id is None:
+                _print("No draft selected.")
+                return
+            confirm = input(f"Publish draft #{selected_draft_id}? (yes/no): ").strip().lower()
+            if confirm not in ("yes", "y"):
+                _print("Publish cancelled.")
+                return
+            configured_cmd = get_config(conn, "publish.opencli_cmd", "opencli twitter post") or "opencli twitter post"
+            _publish_one(conn, selected_draft_id, configured_cmd, dry_run=False)
+            review_ready_for_publish = False
+            print_status_line()
+            return
+
+    header_lines = ["CodeCast client", "single-focus home loaded"]
+    for idx, line in enumerate(header_lines):
+        _print(line)
+        if idx < len(header_lines) - 1 and sys.stdout.isatty():
+            time.sleep(0.18)
+    print_home()
+
     while True:
         try:
             raw = input(f"codecast({mode})> ").strip()
@@ -650,6 +781,7 @@ def _run_line_ui(conn) -> int:
         if raw.startswith("/"):
             if not _handle_slash_command(conn, raw):
                 return 0
+            print_status_line()
             continue
         parts = shlex.split(raw)
         cmd = parts[0].lower()
@@ -657,29 +789,47 @@ def _run_line_ui(conn) -> int:
 
         if cmd == "exit":
             return 0
+        if cmd == "back":
+            mode = "home"
+            review_ready_for_publish = False
+            print_home()
+            continue
+        if cmd == "do":
+            _run_do()
+            continue
+        if cmd == "more":
+            print_more()
+            continue
         if cmd == "help":
-            print_help()
+            if args and args[0].lower() == "full":
+                print_full_help()
+            else:
+                print_compact_help()
             continue
         if cmd == "status":
-            print_status()
+            print_home()
             continue
         if cmd == "pending":
-            mode = "drafts"
+            mode = "review"
             rows = list_drafts(conn, status=STATUS_PENDING)
             if not rows:
                 _print("No pending drafts.")
             else:
                 for row in rows:
                     _print(_format_draft_row(row))
+                selected_draft_id = int(rows[0]["id"])
+                review_ready_for_publish = False
+            print_status_line()
             continue
         if cmd == "all":
-            mode = "drafts"
+            mode = "review"
             rows = list_drafts(conn, status=None)
             if not rows:
                 _print("No drafts found.")
             else:
                 for row in rows:
                     _print(_format_draft_row(row))
+            print_status_line()
             continue
         if cmd == "select":
             if not args:
@@ -692,14 +842,19 @@ def _run_line_ui(conn) -> int:
             if not draft:
                 _print(f"Draft {draft_id} not found.")
                 continue
+            mode = "review"
+            review_ready_for_publish = False
             _print(f"Selected draft {draft_id}")
+            print_status_line()
             continue
         if cmd in ("show", "view"):
+            mode = "review"
             draft_id = _pick_draft(args[0]) if args else _pick_draft()
             if draft_id is None:
                 _print("No draft selected.")
                 continue
             _rerender_and_print(conn, draft_id, None)
+            print_status_line()
             continue
         if cmd == "style":
             if not args:
@@ -715,6 +870,7 @@ def _run_line_ui(conn) -> int:
                 continue
             rerender_draft(conn, draft_id, style)
             _print(f"Draft {draft_id} style updated to {style}")
+            print_status_line()
             continue
         if cmd == "dry-run":
             draft_id = _pick_draft(args[0]) if args else _pick_draft()
@@ -722,7 +878,10 @@ def _run_line_ui(conn) -> int:
                 _print("No pending/failed drafts to dry-run.")
                 continue
             configured_cmd = get_config(conn, "publish.opencli_cmd", "opencli twitter post") or "opencli twitter post"
-            _publish_one(conn, draft_id, configured_cmd, dry_run=True)
+            rc = _publish_one(conn, draft_id, configured_cmd, dry_run=True)
+            if selected_draft_id == draft_id:
+                review_ready_for_publish = rc == 0
+            print_status_line()
             continue
         if cmd == "publish":
             draft_id = _pick_draft(args[0]) if args else _pick_draft()
@@ -735,6 +894,9 @@ def _run_line_ui(conn) -> int:
                 continue
             configured_cmd = get_config(conn, "publish.opencli_cmd", "opencli twitter post") or "opencli twitter post"
             _publish_one(conn, draft_id, configured_cmd, dry_run=False)
+            if selected_draft_id == draft_id:
+                review_ready_for_publish = False
+            print_status_line()
             continue
         if cmd == "retry":
             draft_id = _pick_draft(args[0]) if args else _pick_draft("latest")
@@ -750,6 +912,7 @@ def _run_line_ui(conn) -> int:
                 continue
             configured_cmd = get_config(conn, "publish.opencli_cmd", "opencli twitter post") or "opencli twitter post"
             _publish_one(conn, draft_id, configured_cmd, dry_run=False)
+            print_status_line()
             continue
         if cmd == "history":
             draft_id = _pick_draft(args[0]) if args else _pick_draft()
@@ -774,10 +937,12 @@ def _run_line_ui(conn) -> int:
                     _print(f"  stderr: {str(log['stderr']).strip()[:140]}")
                 elif log["stdout"]:
                     _print(f"  stdout: {str(log['stdout']).strip()[:140]}")
+            print_status_line()
             continue
         if cmd == "setup":
             ok, msg = _run_quick_setup(conn, None, None)
             _print(f"Quick setup {'completed' if ok else 'failed'}: {msg}")
+            print_status_line()
             continue
         if cmd == "config":
             if not args:
@@ -796,10 +961,11 @@ def _run_line_ui(conn) -> int:
                 value = " ".join(args[2:])
                 set_config(conn, key, value)
                 _print(f"Config saved: {key}={value}")
+                print_status_line()
                 continue
             _print("Usage: config [set <key> <value>]")
             continue
-        _print("Unknown command. Type 'help' or use slash commands like /pending.")
+        _print("Unknown command. Use 'do', 'more', 'help' or slash commands like /pending.")
 
 
 def _style_next(style: str) -> str:

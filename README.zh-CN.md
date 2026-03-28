@@ -111,9 +111,36 @@ codecast
 `codecast` 默认进入 plain 客户端模式（最稳定）。
 如果你想要 panel 形态，执行 `codecast cast`。
 
+默认启动是“单焦点首页”：
+- 一行状态摘要
+- 一个推荐下一步动作
+- 一个次动作（`pending`）
+- 一个高级入口（`more`）
+
+你可以用 `back` 随时回到首页。
+
+首次进入示例：
+
+```text
+CodeCast client
+single-focus home loaded
+
+CodeCast
+[status] pending=1 failed=0 selected=12
+next: review
+main: do    secondary: pending    menu: more
+codecast(home)> do
+codecast(review)> do
+```
+
 ### 单词命令（无单字母）
 
 ```text
+do
+more
+back
+help
+help full
 status
 pending
 all
@@ -127,7 +154,6 @@ history [id|latest] [limit]
 setup
 config
 config set <key> <value>
-help
 exit
 ```
 
