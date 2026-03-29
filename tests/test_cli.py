@@ -365,6 +365,26 @@ class CodeCastCLITest(unittest.TestCase):
         self.assertIn("Restarting CodeCast client...", proc.stdout)
         self.assertIn("CodeCast client", proc.stdout)
 
+    def test_web_command_help(self) -> None:
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(Path("/Users/a77/Desktop/CodeCast/src"))
+        proc = subprocess.run(
+            [
+                "python3",
+                "-m",
+                "codecast.cli",
+                "web",
+                "--help",
+            ],
+            text=True,
+            capture_output=True,
+            env=env,
+            cwd="/Users/a77/Desktop/CodeCast",
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("usage: codecast web", proc.stdout)
+        self.assertIn("--host HOST", proc.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

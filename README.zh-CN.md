@@ -106,6 +106,14 @@ git push
 codecast
 ```
 
+打开 Web 客户端（GUI MVP）：
+
+```bash
+codecast web --host 127.0.0.1 --port 8765
+```
+
+然后访问 `http://127.0.0.1:8765`。
+
 ## 终端客户端
 
 `codecast` 默认进入 plain 客户端模式（最稳定）。
@@ -191,6 +199,7 @@ codecast install-hook --repo /repo/a
 codecast ui --plain
 codecast cast
 codecast restart
+codecast web --host 127.0.0.1 --port 8765
 ```
 
 ## 配置项

@@ -41,6 +41,7 @@ from .storage import (
     update_repo_settings,
     build_summary,
 )
+from .web import run_web_server
 
 
 def _print(msg: str) -> None:
@@ -1486,6 +1487,11 @@ def cmd_restart(args: argparse.Namespace) -> int:
     return cmd_ui(args)
 
 
+def cmd_web(args: argparse.Namespace) -> int:
+    run_web_server(args.db_path, args.host, args.port)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="codecast", description="CodeCast MVP CLI")
     parser.add_argument("--db-path", help="Override sqlite database path")
@@ -1570,6 +1576,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_restart.add_argument("--plain", action="store_true", help="Restart to plain mode (default)")
     p_restart.add_argument("--panel", action="store_true", help="Restart to panel mode")
     p_restart.set_defaults(func=cmd_restart, plain=True, panel=False)
+
+    p_web = sub.add_parser("web", help="Start local web client")
+    p_web.add_argument("--host", default="127.0.0.1", help="Bind host")
+    p_web.add_argument("--port", type=int, default=8765, help="Bind port")
+    p_web.set_defaults(func=cmd_web)
     return parser
 
 

@@ -123,6 +123,14 @@ Open client:
 codecast
 ```
 
+Open web client (GUI MVP):
+
+```bash
+codecast web --host 127.0.0.1 --port 8765
+```
+
+Then visit `http://127.0.0.1:8765`.
+
 ## Terminal Client
 
 `codecast` opens plain client mode by default (most stable across terminals).
@@ -194,6 +202,7 @@ codecast install-hook --repo /repo/a
 codecast ui --plain
 codecast cast
 codecast restart
+codecast web --host 127.0.0.1 --port 8765
 ```
 
 ## Configuration
